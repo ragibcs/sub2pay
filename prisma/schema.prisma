@@ -1,0 +1,208 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model AdminSetting {
+  id                    String   @id @default("default")
+  // Shop Bot API (Default Supplier)
+  shopbotBaseUrl        String   @default("https://tunvnmmo.duckdns.org")
+  shopbotApiKey         String   @default("")
+  // Binance Spot Deposit Verification
+  binanceApiKey         String   @default("")
+  binanceApiSecret      String   @default("")
+  binanceDepositAddress String   @default("")
+  binanceDepositNetwork String   @default("BSC")
+  // Binance Pay Merchant
+  binancePayMerchantId  String   @default("")
+  binancePayApiKey      String   @default("")
+  binancePaySecretKey   String   @default("")
+  // Store Settings
+  storeName             String   @default("SimpleCard Store")
+  storeTagline          String   @default("Automated Digital Goods & Subscription Delivery")
+  globalMarkupPercent   Float    @default(15.0)
+  defaultCurrency       String   @default("USDT") // USDT or VND
+  telegramNotification String   @default("")
+  announcementHtml      String?
+  updatedAt             DateTime @updatedAt
+}
+
+model AdminUser {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String   @default("Administrator")
+  role         String   @default("ADMIN")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// Store Customer / User Account
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  name         String?   @default("Customer")
+  avatar       String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  orders       Order[]
+}
+
+// Multi-Vendor API Support
+model Vendor {
+  id          String    @id @default(cuid())
+  name        String    // e.g. "Shop Bot API", "Partner Supplier 2", "Local Card Pool"
+  code        String    @unique // e.g. "shopbot_main", "partner_api", "local"
+  type        String    @default("SHOPBOT") // "SHOPBOT" | "GENERIC_API" | "LOCAL"
+  baseUrl     String    @default("")
+  apiKey      String    @default("")
+  apiSecret   String?   @default("")
+  balanceUsdt Float     @default(0.0)
+  balanceVnd  Float     @default(0.0)
+  isEnabled   Boolean   @default(true)
+  isDefault   Boolean   @default(false)
+  notes       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  products    Product[]
+}
+
+// Payment Methods (Turn ON / OFF Channels)
+model PaymentChannel {
+  id          String   @id @default(cuid())
+  code        String   @unique // "BINANCE_DEPOSIT", "BINANCE_PAY", "SHOPBOT_DEPOSIT", "USDT_TRC20"
+  name        String
+  provider    String   // "binance", "binance_pay", "shopbot", "crypto_manual"
+  description String?
+  badge       String?  // e.g. "Auto Detect", "App QR", "0% Fee"
+  isEnabled   Boolean  @default(true) // Turn ON / OFF!
+  sortOrder   Int      @default(0)
+  feeRate     Float    @default(0.0)
+  configJson  String?  // JSON with custom addresses or credentials
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Product {
+  id               Int        @id // ID (matches Shop Bot or internal increment)
+  name             String
+  description      String?
+  category         String     @default("Subscription")
+  customImage      String?
+  costPriceVnd     Int        @default(0)
+  costPriceUsdt    Float      @default(0.0)
+  retailPriceVnd   Int        @default(0)
+  retailPriceUsdt  Float      @default(0.0)
+  stock            Int        @default(0)
+  bonus            Int        @default(0)
+  isActive         Boolean    @default(true)
+  isFeatured       Boolean    @default(false)
+  deliveryType     String     @default("AUTO") // "AUTO" | "MANUAL" | "CARD_KEY"
+
+  // Multi-vendor link
+  vendorId         String?
+  vendor           Vendor?    @relation(fields: [vendorId], references: [id])
+  vendorProductRef String?    // Product ID on external vendor
+
+  cardKeys         CardKey[]
+  updatedAt        DateTime   @updatedAt
+}
+
+model CardKey {
+  id          String    @id @default(cuid())
+  productId   Int
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  cardContent String    // License key, activation code, or "user | pass"
+  status      String    @default("AVAILABLE") // "AVAILABLE", "SOLD", "RESERVED"
+  orderId     String?
+  createdAt   DateTime  @default(now())
+  soldAt      DateTime?
+
+  @@index([productId, status])
+}
+
+model Order {
+  id                String   @id @default(cuid())
+  orderNumber       String   @unique // e.g. SUB-170001-XYZ
+  customerEmail     String
+  productId         Int
+  productName       String
+  quantity          Int      @default(1)
+  currency          String   @default("usdt") // usdt or vnd
+  wholesalePrice    Float    @default(0.0)
+  totalAmount       Float    @default(0.0)
+
+  // Payment Details
+  paymentMethod     String   @default("BINANCE_DEPOSIT")
+  paymentStatus     String   @default("PENDING") // PENDING, PAID, EXPIRED, FAILED
+  paymentAddress    String?
+  exactPayAmount    Float?   // e.g. 10.0123 for exact matching
+  paymentTxId       String?  // Blockchain TxHash / Binance TxId
+  paymentCode       String?  // Shop Bot payment_code or Binance Pay prepayId
+  paymentExpiresAt  DateTime
+
+  // Fulfillment Details
+  fulfillmentStatus String   @default("PENDING") // PENDING, DELIVERED, FAILED, REFUNDED
+  vendorId          String?
+  vendorName        String?
+  shopbotOrderGroup String?  // e.g. "ORD17000001234"
+  deliveredItems    String?  // JSON string array of delivered units e.g. ["user | pass"]
+  fulfillmentError  String?
+
+  // Customer User Account Link (Optional - supports guest & registered users)
+  userId            String?
+  user              User?    @relation(fields: [userId], references: [id])
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([customerEmail])
+  @@index([paymentStatus])
+  @@index([paymentCode])
+}
+
+model BuffOrder {
+  id               String   @id @default(cuid())
+  batchId          String   @unique // e.g. BUFF-170001-XYZ
+  customerEmail    String
+  ordersText       String   // e.g. "ABBADJ 20\nABCDGD 15"
+  totalTokensB     Int      @default(0)
+  wholesaleCostVnd Int      @default(0)
+  wholesaleCostUsdt Float   @default(0.0)
+  sellPriceVnd     Int      @default(0)
+  sellPriceUsdt    Float    @default(0.0)
+  currency         String   @default("usdt")
+
+  // Payment
+  paymentMethod    String   @default("BINANCE_DEPOSIT")
+  paymentStatus    String   @default("PENDING") // PENDING, PAID, EXPIRED
+  paymentAddress   String?
+  exactPayAmount   Float?
+  paymentTxId      String?
+  paymentCode      String?
+  paymentExpiresAt DateTime
+
+  // Fulfillment
+  shopbotBatchId   String?  // External batch id e.g. BUFF1770000012345
+  status           String   @default("PENDING") // PENDING, PROCESSING, DONE, FAILED
+  isDone           Boolean  @default(false)
+  ordersJson       String?  // JSON array of individual code lines
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([customerEmail])
+  @@index([paymentStatus])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  action    String
+  details   String?
+  actor     String   @default("SYSTEM")
+  createdAt DateTime @default(now())
+}
