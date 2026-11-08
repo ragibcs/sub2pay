@@ -15,7 +15,11 @@ import {
   ShieldCheck,
   Zap,
   ArrowRight,
+  RefreshCw,
   ExternalLink,
+  ChevronDown,
+  ChevronUp,
+  Hash,
 } from "lucide-react";
 import { formatUsdt, formatVnd } from "@/lib/utils";
 
@@ -39,48 +43,57 @@ export default function CheckoutPage({ params }: CheckoutPageProps) {
   const [copiedCredentials, setCopiedCredentials] = useState(false);
   const [timeLeft, setTimeLeft] = useState<string>("");
 
-  // Poll status every 3 seconds
+  // Manual Check & TxID states
+  const [manualChecking, setManualChecking] = useState(false);
+  const [manualTxOpen, setManualTxOpen] = useState(false);
+  const [inputTxId, setInputTxId] = useState("");
+  const [submittingTxId, setSubmittingTxId] = useState(false);
+  const [txIdError, setTxIdError] = useState<string | null>(null);
+  const [txIdSuccess, setTxIdSuccess] = useState<string | null>(null);
+
+  const checkStatus = async (isManual = false) => {
+    if (isManual) setManualChecking(true);
+    try {
+      const res = await fetch(`/api/public/orders/${orderNumber}/status`);
+      const data = await res.json();
+
+      if (!data.success) {
+        setError(data.error || "Order not found");
+        setLoading(false);
+        return;
+      }
+
+      setOrder(data.order);
+      setPaymentStatus(data.paymentStatus);
+      setFulfillmentStatus(data.fulfillmentStatus);
+      setMessage(data.message || "");
+
+      if (data.deliveredItems && data.deliveredItems.length > 0) {
+        setDeliveredItems(data.deliveredItems);
+      }
+
+      // Trigger celebratory confetti on delivery
+      if (data.fulfillmentStatus === "DELIVERED") {
+        confetti({
+          particleCount: 80,
+          spread: 70,
+          origin: { y: 0.6 },
+        });
+      }
+    } catch (err: any) {
+      console.error("Status polling error:", err);
+    } finally {
+      setLoading(false);
+      if (isManual) setManualChecking(false);
+    }
+  };
+
+  // Poll status every 3 seconds while pending
   useEffect(() => {
     let interval: NodeJS.Timeout;
 
-    const checkStatus = async () => {
-      try {
-        const res = await fetch(`/api/public/orders/${orderNumber}/status`);
-        const data = await res.json();
-
-        if (!data.success) {
-          setError(data.error || "Order not found");
-          setLoading(false);
-          return;
-        }
-
-        setOrder(data.order);
-        setPaymentStatus(data.paymentStatus);
-        setFulfillmentStatus(data.fulfillmentStatus);
-        setMessage(data.message || "");
-
-        if (data.deliveredItems && data.deliveredItems.length > 0) {
-          setDeliveredItems(data.deliveredItems);
-        }
-
-        // Trigger confetti when order delivers
-        if (data.fulfillmentStatus === "DELIVERED") {
-          confetti({
-            particleCount: 80,
-            spread: 70,
-            origin: { y: 0.6 },
-          });
-        }
-      } catch (err: any) {
-        console.error("Polling error:", err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
     checkStatus();
 
-    // Poll every 3 seconds while not yet delivered and not expired
     interval = setInterval(() => {
       if (fulfillmentStatus !== "DELIVERED" && paymentStatus !== "EXPIRED") {
         checkStatus();
@@ -125,13 +138,50 @@ export default function CheckoutPage({ params }: CheckoutPageProps) {
     }
   };
 
+  const handleVerifyTxId = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputTxId.trim()) return;
+
+    setSubmittingTxId(true);
+    setTxIdError(null);
+    setTxIdSuccess(null);
+
+    try {
+      const res = await fetch(`/api/public/orders/${orderNumber}/verify-txid`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ txId: inputTxId.trim() }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success || !data.verified) {
+        throw new Error(data.error || "Transaction hash could not be confirmed yet.");
+      }
+
+      setTxIdSuccess("Transaction confirmed! Unlocking your credentials...");
+      if (data.deliveredItems) {
+        setDeliveredItems(data.deliveredItems);
+      }
+      setFulfillmentStatus("DELIVERED");
+      setPaymentStatus("PAID");
+
+      confetti({ particleCount: 90, spread: 80, origin: { y: 0.6 } });
+    } catch (err: any) {
+      setTxIdError(err.message || "Verification failed");
+    } finally {
+      setSubmittingTxId(false);
+    }
+  };
+
   const downloadCredentials = () => {
-    const content = `SubXpress Order: ${orderNumber}\nProduct: ${order?.productName}\nDelivered Items:\n${deliveredItems.join("\n")}\n\nDate: ${new Date().toISOString()}`;
+    const content = `Sub2Pay Order: ${orderNumber}\nProduct: ${order?.productName}\nDelivered Items:\n${deliveredItems.join(
+      "\n"
+    )}\n\nDate: ${new Date().toISOString()}`;
     const blob = new Blob([content], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `SubXpress_${orderNumber}.txt`;
+    a.download = `Sub2Pay_${orderNumber}.txt`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -140,7 +190,7 @@ export default function CheckoutPage({ params }: CheckoutPageProps) {
     return (
       <div className="min-h-[60vh] flex flex-col items-center justify-center text-slate-400">
         <Loader2 className="w-8 h-8 animate-spin text-primary mb-3" />
-        <p className="text-sm font-medium">Loading order details...</p>
+        <p className="text-sm font-medium">Loading live checkout details...</p>
       </div>
     );
   }
@@ -166,21 +216,21 @@ export default function CheckoutPage({ params }: CheckoutPageProps) {
   const isExpired = paymentStatus === "EXPIRED";
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-12">
-      {/* Top Banner / Order ID */}
+    <div className="max-w-3xl mx-auto px-4 py-10 space-y-6">
+      {/* Top Header Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-6 border-b border-border gap-4">
         <div>
-          <span className="text-[11px] font-semibold text-accent uppercase tracking-wider">
-            Order Confirmation
+          <span className="text-[10px] font-bold text-accent uppercase tracking-wider">
+            Automated Crypto Checkout
           </span>
-          <h1 className="text-2xl font-extrabold text-white">{order.productName}</h1>
-          <p className="text-xs text-slate-400 mt-0.5">Order #{orderNumber}</p>
+          <h1 className="text-2xl font-extrabold text-white mt-0.5">{order.productName}</h1>
+          <p className="text-xs text-slate-400">Order ID: #{orderNumber}</p>
         </div>
 
         <div className="flex items-center gap-2">
           {isDelivered ? (
-            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-xs font-bold text-emerald-400">
-              <CheckCircle2 className="w-4 h-4" /> Delivered & Verified
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-xs font-bold text-emerald-400 shadow-sm">
+              <CheckCircle2 className="w-4 h-4" /> Paid &amp; Delivered
             </span>
           ) : isPaidPending ? (
             <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-warning/10 border border-warning/20 text-xs font-bold text-warning">
@@ -192,19 +242,55 @@ export default function CheckoutPage({ params }: CheckoutPageProps) {
             </span>
           ) : (
             <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-primary/10 border border-primary/20 text-xs font-bold text-primary-light">
-              <Clock className="w-4 h-4" /> Awaiting Binance Payment ({timeLeft})
+              <Clock className="w-4 h-4 animate-pulse" /> Awaiting Transfer ({timeLeft})
             </span>
           )}
         </div>
       </div>
 
+      {/* Progress Steps Header */}
+      <div className="grid grid-cols-3 gap-2 text-center text-xs">
+        <div
+          className={`p-2.5 rounded-xl border ${
+            !isDelivered
+              ? "bg-primary/10 border-primary text-white font-bold"
+              : "bg-surface-card border-border text-slate-400"
+          }`}
+        >
+          <span className="block text-[10px] text-slate-400">Step 1</span>
+          1. Send Exact Crypto
+        </div>
+
+        <div
+          className={`p-2.5 rounded-xl border ${
+            !isDelivered
+              ? "bg-warning/10 border-warning/30 text-warning font-bold animate-pulse-slow"
+              : "bg-surface-card border-border text-slate-400"
+          }`}
+        >
+          <span className="block text-[10px] text-slate-400">Step 2</span>
+          2. Auto-Detect Blockchain
+        </div>
+
+        <div
+          className={`p-2.5 rounded-xl border ${
+            isDelivered
+              ? "bg-emerald-500/15 border-emerald-500 text-emerald-400 font-bold"
+              : "bg-surface-card border-border text-slate-500"
+          }`}
+        >
+          <span className="block text-[10px] text-slate-400">Step 3</span>
+          3. Instant Delivery Reveal
+        </div>
+      </div>
+
       {/* Main Container */}
-      <div className="mt-8">
-        {/* State A: DELIVERED (Success Reveal) */}
+      <div className="space-y-6">
+        {/* State A: DELIVERED (Instant Credentials Reveal Box) */}
         {isDelivered && (
-          <div className="p-6 sm:p-8 rounded-2xl bg-surface-card border border-emerald-500/30 shadow-2xl space-y-6">
+          <div className="p-6 sm:p-8 rounded-2xl bg-surface-card border border-emerald-500/40 shadow-2xl space-y-6 animate-fade-in">
             <div className="flex items-start gap-4">
-              <div className="p-3 rounded-xl bg-emerald-500/20 text-emerald-400">
+              <div className="p-3 rounded-2xl bg-emerald-500/20 text-emerald-400 shrink-0">
                 <CheckCircle2 className="w-8 h-8" />
               </div>
               <div className="flex-1">
@@ -219,21 +305,21 @@ export default function CheckoutPage({ params }: CheckoutPageProps) {
             {/* Delivered Credentials Box */}
             <div className="p-5 rounded-xl bg-surface border border-border space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                  Delivered Account Credentials
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                  Delivered Account Credentials / Key
                 </span>
                 <div className="flex items-center gap-2">
                   <button
                     onClick={downloadCredentials}
-                    className="p-1.5 rounded-lg bg-surface-card hover:bg-surface-raised text-slate-300 hover:text-white text-xs flex items-center gap-1"
+                    className="p-1.5 rounded-lg bg-surface-card hover:bg-surface-raised text-slate-300 hover:text-white text-xs flex items-center gap-1 transition-colors"
                     title="Download as .txt file"
                   >
                     <Download className="w-3.5 h-3.5" />
-                    Download
+                    Download (.txt)
                   </button>
                   <button
                     onClick={() => copyToClipboard(deliveredItems.join("\n"), "creds")}
-                    className="px-2.5 py-1.5 rounded-lg bg-primary hover:bg-primary-hover text-white text-xs font-bold flex items-center gap-1 shadow-md shadow-primary/20"
+                    className="px-3 py-1.5 rounded-lg bg-primary hover:bg-primary-hover text-white text-xs font-bold flex items-center gap-1 shadow-md shadow-primary/20 transition-all"
                   >
                     {copiedCredentials ? (
                       <>
@@ -261,7 +347,7 @@ export default function CheckoutPage({ params }: CheckoutPageProps) {
             <div className="flex flex-col sm:flex-row items-center justify-between p-4 rounded-xl bg-surface-card border border-border text-xs text-slate-400 gap-3">
               <span className="flex items-center gap-1.5">
                 <ShieldCheck className="w-4 h-4 text-accent" />
-                Saved to order history. You can retrieve these anytime via Order Lookup.
+                Receipt sent to your email. You can also retrieve these anytime via Order Lookup.
               </span>
               <Link
                 href="/orders"
@@ -273,23 +359,23 @@ export default function CheckoutPage({ params }: CheckoutPageProps) {
           </div>
         )}
 
-        {/* State B: PENDING PAYMENT (QR Code + Transfer Instructions) */}
+        {/* State B: PENDING PAYMENT (QR Code, Transfer Details & Auto-Verify) */}
         {!isDelivered && !isExpired && (
           <div className="p-6 sm:p-8 rounded-2xl bg-surface-card border border-border shadow-xl space-y-6">
             {/* Header info */}
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <h3 className="text-base font-bold text-white flex items-center gap-2">
                   <Zap className="w-5 h-5 text-warning" />
                   Transfer Payment Instructions
                 </h3>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Send the EXACT amount below. Our system matches on-chain deposits automatically.
+                  Send the exact crypto amount below. Our system matches deposits automatically on-chain.
                 </p>
               </div>
 
               {/* Countdown badge */}
-              <div className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-surface border border-border text-xs font-mono font-bold text-warning">
+              <div className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-surface border border-border text-xs font-mono font-bold text-warning self-start sm:self-auto">
                 <Clock className="w-3.5 h-3.5 animate-pulse" />
                 <span>Expires: {timeLeft}</span>
               </div>
@@ -300,11 +386,11 @@ export default function CheckoutPage({ params }: CheckoutPageProps) {
               <div className="flex flex-col items-center justify-center p-5 rounded-2xl bg-white border border-slate-200">
                 <QRCodeSVG
                   value={order.paymentAddress || ""}
-                  size={170}
+                  size={165}
                   level="M"
                   includeMargin={false}
                 />
-                <span className="text-[11px] font-bold text-slate-700 mt-2 uppercase tracking-wider">
+                <span className="text-[11px] font-extrabold text-slate-800 mt-2.5 uppercase tracking-wider">
                   Network: BEP20 (BSC)
                 </span>
               </div>
@@ -333,7 +419,7 @@ export default function CheckoutPage({ params }: CheckoutPageProps) {
                 {/* Wallet Address */}
                 <div className="p-3.5 rounded-xl bg-surface border border-border">
                   <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-                    <span>USDT Deposit Address (BEP20 / BSC):</span>
+                    <span>Deposit Address (BEP20 / BSC):</span>
                     <button
                       onClick={() => copyToClipboard(order.paymentAddress || "", "address")}
                       className="text-primary font-bold hover:underline flex items-center gap-1 text-[11px]"
@@ -342,30 +428,103 @@ export default function CheckoutPage({ params }: CheckoutPageProps) {
                       {copiedAddress ? "Copied" : "Copy Address"}
                     </button>
                   </div>
-                  <div className="font-mono text-xs text-slate-200 break-all bg-surface-card p-2 rounded-lg border border-border/80">
+                  <div className="font-mono text-xs text-slate-200 break-all bg-surface-card p-2 rounded-lg border border-border/80 select-all">
                     {order.paymentAddress}
                   </div>
                 </div>
 
-                {/* Important note */}
+                {/* Important notice */}
                 <div className="p-3 rounded-xl bg-warning/10 border border-warning/20 text-xs text-warning flex items-start gap-2">
                   <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                   <span>
-                    <strong>Important:</strong> You must send exactly{" "}
+                    <strong>Auto-Detection Rule:</strong> You must transfer exactly{" "}
                     <strong>{order.exactPayAmount} USDT</strong> via <strong>BEP20</strong> network.
-                    The system will automatically detect the transfer within 1–2 minutes.
+                    The system will detect and fulfill the order automatically within 1–2 minutes.
                   </span>
                 </div>
               </div>
             </div>
 
-            {/* Live Polling progress bar */}
-            <div className="pt-4 border-t border-border flex items-center justify-between text-xs text-slate-400">
-              <div className="flex items-center gap-2">
-                <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                <span>Monitoring Binance blockchain for incoming transfer...</span>
+            {/* Live Auto-Verify Status Bar & Manual Check Button */}
+            <div className="p-4 rounded-xl bg-surface border border-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 text-xs text-slate-300">
+                <Loader2 className="w-4 h-4 animate-spin text-primary shrink-0" />
+                <span>
+                  Auto-scanning Binance blockchain for incoming transfer...{" "}
+                  <span className="text-[11px] text-slate-500 font-mono">(Polls every 3s)</span>
+                </span>
               </div>
-              <span className="text-[11px] text-slate-500">Auto-refreshing</span>
+
+              <button
+                type="button"
+                onClick={() => checkStatus(true)}
+                disabled={manualChecking}
+                className="px-3.5 py-1.5 rounded-lg bg-surface-raised hover:bg-surface-card border border-border text-xs text-white font-semibold flex items-center gap-1.5 transition-all shrink-0 self-start sm:self-auto"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${manualChecking ? "animate-spin" : ""}`} />
+                Check Payment Now
+              </button>
+            </div>
+
+            {/* Manual TxID Verification Accordion */}
+            <div className="border-t border-border pt-4">
+              <button
+                type="button"
+                onClick={() => setManualTxOpen(!manualTxOpen)}
+                className="flex items-center justify-between w-full text-xs text-slate-400 hover:text-white transition-colors"
+              >
+                <span className="flex items-center gap-1.5">
+                  <Hash className="w-3.5 h-3.5 text-accent" />
+                  Transferred already? Paste your Transaction Hash (TxID) to verify immediately
+                </span>
+                {manualTxOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              </button>
+
+              {manualTxOpen && (
+                <form
+                  onSubmit={handleVerifyTxId}
+                  className="mt-3 p-4 rounded-xl bg-surface border border-border space-y-3 animate-fade-in"
+                >
+                  <label className="block text-[11px] font-semibold text-slate-300">
+                    Enter Blockchain Transaction Hash (TxID):
+                  </label>
+                  <div className="flex flex-col sm:flex-row items-center gap-2">
+                    <input
+                      type="text"
+                      required
+                      value={inputTxId}
+                      onChange={(e) => setInputTxId(e.target.value)}
+                      placeholder="e.g. 0x1234567890abcdef..."
+                      className="w-full px-3 py-2 rounded-xl bg-surface-card border border-border text-xs font-mono text-white focus:outline-none focus:border-accent"
+                    />
+                    <button
+                      type="submit"
+                      disabled={submittingTxId}
+                      className="w-full sm:w-auto px-4 py-2 rounded-xl bg-accent hover:bg-accent-hover text-white text-xs font-bold flex items-center justify-center gap-1.5 whitespace-nowrap disabled:opacity-50"
+                    >
+                      {submittingTxId ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Verifying...
+                        </>
+                      ) : (
+                        "Verify TxID"
+                      )}
+                    </button>
+                  </div>
+
+                  {txIdError && (
+                    <div className="p-2.5 rounded-lg bg-danger/10 border border-danger/20 text-xs text-danger">
+                      {txIdError}
+                    </div>
+                  )}
+
+                  {txIdSuccess && (
+                    <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-400">
+                      {txIdSuccess}
+                    </div>
+                  )}
+                </form>
+              )}
             </div>
           </div>
         )}
@@ -377,7 +536,7 @@ export default function CheckoutPage({ params }: CheckoutPageProps) {
             <h3 className="text-xl font-bold text-white">Payment Window Expired</h3>
             <p className="text-xs text-slate-400 max-w-md mx-auto">
               This order has expired. If you have already transferred funds, please contact support
-              or open an order lookup.
+              or look up your order with your transaction hash.
             </p>
             <Link
               href="/"

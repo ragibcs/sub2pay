@@ -18,6 +18,10 @@ body {
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   min-height: 100vh;
   overflow-x: hidden;
+  background-image:
+    radial-gradient(at 15% 15%, rgba(99, 102, 241, 0.08) 0px, transparent 50%),
+    radial-gradient(at 85% 85%, rgba(6, 182, 212, 0.06) 0px, transparent 50%);
+  background-attachment: fixed;
 }
 
 /* Custom scrollbar */
@@ -40,11 +44,25 @@ body {
 }
 
 .gradient-glow {
-  background: radial-gradient(circle at 50% 0%, rgba(99, 102, 241, 0.15) 0%, transparent 70%);
+  background: radial-gradient(circle at 50% 0%, rgba(99, 102, 241, 0.18) 0%, transparent 70%);
 }
 
 .glass-panel {
-  background: rgba(19, 27, 43, 0.7);
-  backdrop-filter: blur(12px);
+  background: rgba(19, 27, 43, 0.75);
+  backdrop-filter: blur(14px);
   border: 1px solid rgba(30, 44, 68, 0.8);
+}
+
+.card-glow {
+  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.5), 0 0 1px 1px rgba(255, 255, 255, 0.05);
+}
+
+.card-glow:hover {
+  box-shadow: 0 10px 30px -5px rgba(99, 102, 241, 0.15), 0 0 1px 1px rgba(99, 102, 241, 0.3);
+}
+
+/* Smooth selection */
+::selection {
+  background: #6366f1;
+  color: #ffffff;
 }
