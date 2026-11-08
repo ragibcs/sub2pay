@@ -1,6 +1,7 @@
 import { prisma } from "./prisma";
 import { ShopBotClient, type ShopBotBuyResponse } from "./shopbot-client";
 import { BinanceClient } from "./binance-client";
+import { EmailService } from "./email-service";
 
 export interface OrderVerificationResult {
   paid: boolean;
@@ -118,29 +119,33 @@ export class FulfillmentService {
     });
 
     try {
-      // Route 1: Local Card Key Inventory
+      // Route 1: Local Card Key Inventory (Atomic Transaction to prevent double-selling)
       if (product?.deliveryType === "CARD_KEY" || product?.vendor?.type === "LOCAL") {
-        const availableKeys = await prisma.cardKey.findMany({
-          where: { productId: order.productId, status: "AVAILABLE" },
-          take: order.quantity,
-        });
+        const delivered = await prisma.$transaction(async (tx) => {
+          const availableKeys = await tx.cardKey.findMany({
+            where: { productId: order.productId, status: "AVAILABLE" },
+            take: order.quantity,
+          });
 
-        if (availableKeys.length >= order.quantity) {
+          if (availableKeys.length < order.quantity) {
+            return null; // Not enough stock right now
+          }
+
           const items = availableKeys.map((k) => k.cardContent);
           const keyIds = availableKeys.map((k) => k.id);
 
-          await prisma.cardKey.updateMany({
-            where: { id: { in: keyIds } },
+          await tx.cardKey.updateMany({
+            where: { id: { in: keyIds }, status: "AVAILABLE" },
             data: { status: "SOLD", orderId: order.id, soldAt: new Date() },
           });
 
-          // Decrement stock
-          await prisma.product.update({
+          // Decrement product stock safely
+          await tx.product.update({
             where: { id: order.productId },
             data: { stock: { decrement: order.quantity } },
           });
 
-          await prisma.order.update({
+          await tx.order.update({
             where: { id: order.id },
             data: {
               fulfillmentStatus: "DELIVERED",
@@ -151,19 +156,35 @@ export class FulfillmentService {
             },
           });
 
+          return items;
+        });
+
+        if (delivered && delivered.length > 0) {
           await prisma.auditLog.create({
             data: {
               action: "ORDER_FULFILLED_LOCAL",
-              details: `Order ${order.orderNumber} delivered ${items.length} card key(s) from local pool`,
+              details: `Order ${order.orderNumber} delivered ${delivered.length} card key(s) from local pool`,
               actor: "SYSTEM",
             },
           });
+
+          // Send transactional delivery email
+          EmailService.sendOrderDeliveryEmail({
+            toEmail: order.customerEmail,
+            orderNumber: order.orderNumber,
+            productName: order.productName,
+            quantity: order.quantity,
+            totalAmount: order.totalAmount,
+            currency: order.currency,
+            deliveredItems: delivered,
+            txId: order.paymentTxId,
+          }).catch((e) => console.warn("[Fulfillment] Email trigger warning:", e));
 
           return {
             paid: true,
             fulfilled: true,
             status: "DELIVERED",
-            deliveredItems: items,
+            deliveredItems: delivered,
             message: "Payment confirmed and card keys delivered instantly!",
           };
         }
@@ -209,6 +230,18 @@ export class FulfillmentService {
           },
         });
 
+        // Send transactional delivery email
+        EmailService.sendOrderDeliveryEmail({
+          toEmail: order.customerEmail,
+          orderNumber: order.orderNumber,
+          productName: order.productName,
+          quantity: order.quantity,
+          totalAmount: order.totalAmount,
+          currency: order.currency,
+          deliveredItems: buyRes.items,
+          txId: order.paymentTxId,
+        }).catch((e) => console.warn("[Fulfillment] Email trigger warning:", e));
+
         return {
           paid: true,
           fulfilled: true,
@@ -225,6 +258,12 @@ export class FulfillmentService {
             fulfillmentError: errMsg,
           },
         });
+
+        EmailService.sendAdminAlert(
+          `Fulfillment Failed for Order #${order.orderNumber}`,
+          `Order #${order.orderNumber} (${product?.name}) payment confirmed, but wholesale fulfillment returned: ${errMsg}`
+        ).catch(() => {});
+
         return {
           paid: true,
           fulfilled: false,
@@ -249,6 +288,11 @@ export class FulfillmentService {
           actor: "SYSTEM",
         },
       });
+
+      EmailService.sendAdminAlert(
+        `Fulfillment Exception on Order #${order.orderNumber}`,
+        `Exception: ${errMsg}`
+      ).catch(() => {});
 
       return {
         paid: true,

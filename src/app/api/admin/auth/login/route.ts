@@ -2,11 +2,25 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { signAdminToken, COOKIE_NAME } from "@/lib/auth";
+import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   try {
+    // Brute force protection: 5 attempts per 60 seconds
+    const ip = getClientIp(req);
+    const rateCheck = checkRateLimit(`admin_login_${ip}`, { limit: 5, windowMs: 60 * 1000 });
+    if (!rateCheck.success) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Too many login attempts. Please wait ${rateCheck.resetInSeconds} seconds before trying again.`,
+        },
+        { status: 429 }
+      );
+    }
+
     const { email, password } = await req.json();
 
     if (!email || !password) {

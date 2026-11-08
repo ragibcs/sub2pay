@@ -13,6 +13,8 @@ import {
   DollarSign,
   HelpCircle,
   Coins,
+  Lock,
+  Clock,
 } from "lucide-react";
 
 export default function AdminSettingsPage() {
@@ -53,6 +55,16 @@ export default function AdminSettingsPage() {
     success: boolean;
     message: string;
   } | null>(null);
+
+  // Security password states
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [passwordMsg, setPasswordMsg] = useState<{ success: boolean; text: string } | null>(null);
+
+  // Background Reconciler Cron state
+  const [triggeringCron, setTriggeringCron] = useState(false);
+  const [cronSummary, setCronSummary] = useState<any | null>(null);
 
   useEffect(() => {
     fetch("/api/admin/settings")
@@ -174,6 +186,50 @@ export default function AdminSettingsPage() {
       });
     } finally {
       setTestingBinance(false);
+    }
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setChangingPassword(true);
+    setPasswordMsg(null);
+
+    try {
+      const res = await fetch("/api/admin/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to update password");
+      }
+
+      setPasswordMsg({ success: true, text: "Admin password successfully updated!" });
+      setCurrentPassword("");
+      setNewPassword("");
+      setTimeout(() => setPasswordMsg(null), 4000);
+    } catch (err: any) {
+      setPasswordMsg({ success: false, text: err.message || "Password change failed" });
+    } finally {
+      setChangingPassword(false);
+    }
+  };
+
+  const handleTriggerCron = async () => {
+    setTriggeringCron(true);
+    setCronSummary(null);
+
+    try {
+      const res = await fetch("/api/cron/reconcile-payments");
+      const data = await res.json();
+      if (data.success && data.summary) {
+        setCronSummary(data.summary);
+      }
+    } catch (err: any) {
+      console.error(err);
+    } finally {
+      setTriggeringCron(false);
     }
   };
 
@@ -582,6 +638,135 @@ export default function AdminSettingsPage() {
           </button>
         </div>
       </form>
+
+      {/* Section 5: Background Payment Reconciler (Production Cron) */}
+      <div className="p-6 rounded-2xl bg-surface-card border border-border space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 rounded-xl bg-primary/10 text-primary-light">
+              <Clock className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-white">
+                Background Payment Reconciler (Worker / Cron)
+              </h3>
+              <p className="text-xs text-slate-400">
+                Automatically checks all pending orders against Binance and fulfills them even if the
+                buyer closed the browser.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleTriggerCron}
+            disabled={triggeringCron}
+            className="px-4 py-2 rounded-xl bg-surface-raised hover:bg-surface border border-border text-xs font-semibold text-slate-200 hover:text-white flex items-center gap-1.5 transition-all"
+          >
+            {triggeringCron ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" /> Scanning Blockchain...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="w-3.5 h-3.5" /> Run Reconciler Now
+              </>
+            )}
+          </button>
+        </div>
+
+        <div className="text-xs text-slate-400 font-mono bg-surface p-3 rounded-xl border border-border/80">
+          <strong>Production Cron Webhook Endpoint:</strong> <code>GET /api/cron/reconcile-payments</code>
+          <br />
+          <span className="text-[11px] text-slate-500">
+            Set up a 1-minute recurring ping via Vercel Cron, GitHub Actions, or crontab. Protected
+            by <code>CRON_SECRET</code> environment variable.
+          </span>
+        </div>
+
+        {cronSummary && (
+          <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-300">
+            ✓ Scan finished in {cronSummary.durationMs}ms: Checked {cronSummary.checkedOrders} pending
+            orders ({cronSummary.confirmedOrders} confirmed &amp; fulfilled, {cronSummary.expiredOrders} expired).
+          </div>
+        )}
+      </div>
+
+      {/* Section 6: Admin Security & Password Change */}
+      <div className="p-6 rounded-2xl bg-surface-card border border-border space-y-4">
+        <div className="flex items-center gap-2.5">
+          <div className="p-2 rounded-xl bg-warning/10 text-warning">
+            <Lock className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-white">Admin Security &amp; Password</h3>
+            <p className="text-xs text-slate-400">
+              Update your administrator password to replace the default credentials.
+            </p>
+          </div>
+        </div>
+
+        {passwordMsg && (
+          <div
+            className={`p-3.5 rounded-xl text-xs flex items-center gap-2 border ${
+              passwordMsg.success
+                ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+                : "bg-danger/10 border-danger/20 text-danger"
+            }`}
+          >
+            {passwordMsg.success ? (
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+            ) : (
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+            )}
+            <span>{passwordMsg.text}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleChangePassword} className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">
+              Current Password
+            </label>
+            <input
+              type="password"
+              required
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              placeholder="Current password"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-surface border border-border text-xs text-white focus:outline-none focus:border-primary"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">
+              New Password (Min 8 chars)
+            </label>
+            <input
+              type="password"
+              required
+              minLength={8}
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="New strong password"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-surface border border-border text-xs text-white focus:outline-none focus:border-primary"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={changingPassword}
+            className="px-5 py-2.5 rounded-xl bg-warning hover:bg-amber-600 text-slate-900 font-bold text-xs shadow-md transition-all flex items-center justify-center gap-1.5 disabled:opacity-50"
+          >
+            {changingPassword ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Lock className="w-3.5 h-3.5" />
+            )}
+            Update Password
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

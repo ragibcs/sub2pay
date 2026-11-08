@@ -4,11 +4,24 @@ import { generateOrderNumber } from "@/lib/utils";
 import { getSystemSettings } from "@/lib/settings-service";
 import { BinanceClient } from "@/lib/binance-client";
 import { ShopBotClient } from "@/lib/shopbot-client";
+import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   try {
+    const ip = getClientIp(req);
+    const rateCheck = checkRateLimit(`order_create_${ip}`, { limit: 15, windowMs: 60 * 1000 });
+    if (!rateCheck.success) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Order creation rate limit reached. Please wait ${rateCheck.resetInSeconds} seconds.`,
+        },
+        { status: 429 }
+      );
+    }
+
     const body = await req.json();
     const { productId, quantity = 1, customerEmail, paymentMethod = "BINANCE_DEPOSIT", currency = "usdt" } = body;
 
